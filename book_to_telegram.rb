@@ -1,76 +1,127 @@
 require 'telegram/bot'
+require 'fallen'
+require_relative '../config/environment'
+
 # require 'net/http'
+class TelegramInlineBot
 
-token = '150509464:AAHp-hAiYCqJIGJ7l9PJZLDKu_GWgDQX26E'.freeze
-default_results_quantity = 5.freeze
+  BOOKMATE_HOST = 'https://bookmate.com'.freeze
+  TOKEN = 'PASTE_YOUR_TOKEN'.freeze #
+  DEFAULT_RESULTS_QUANTITY = 5.freeze
 
-def processMessage(message)
-  return "Hello, #{message.from.first_name}! For now I can process only inline queries, sorry for that"
-end
+  def process_message(message)
+    "Hello, #{message.from.first_name}! For now I can process only inline queries, sorry for that"
+  end
 
-def processInlineQuery(message)
-  inlineQuery = message
-  queryId = message.id
-  queryText = message.query
-    
-  if queryText && queryText != ""
-    return prepareAnswerQuery(queryText)
-  else
-    return defaultAnswerQuery
-  end 
+  def process_inline_query(message)
+    query_text = message.query
 
-end
+    if query_text && query_text != ''
+      return prepare_answer_query(query_text)
+    else
+      return default_answer_query
+    end
 
-def prepareAnswerQuery(queryText)
-  f = "" # BookSuggestsForm.new({query: queryText, pp: default_results_quantity})
-  
-  if f
-    results = defaultAnswerQuery
-  else
-    for i in 0..default_results_quantity
-      unless f
-        results[i] = [
+  end
+
+  def prepare_answer_query(query_text)
+    form # here's a way to get books list, it's project specific hence I veil this
+    books = form.books.to_a
+    results = []
+    i = 0
+
+    if books.empty?
+      results = default_answer_query
+    else
+      books.each do |book|
+        results[i] =
           Telegram::Bot::Types::InlineQueryResultArticle.new(
-            id: i,
-            title: "Cool title",
-            input_message_content: Telegram::Bot::Types::InputTextMessageContent.new(message_text: "hey looool")),
+            id: book.uuid,
+            title: book.title,
+            description: book.authors,
+            thumb_url: book.cover_url.blank? ? '' : BOOKMATE_HOST + book.cover_url,
+            input_message_content: Telegram::Bot::Types::InputTextMessageContent.new(
+              message_text:
+              "<b>#{book.title}</b>
+  <a href='#{prepare_book_url(book)}'>On Bookmate</a>
+  Author: #{book.authors}",
+              parse_mode: 'HTML'))
+      i += 1
+      end
+    end
+
+    results
+  end
+
+  def default_answer_query
+    books # some default popular results, also project specific
+    results = []
+    i = 0
+
+    unless books.empty?
+      books.each do |book|
+        results[i] =
           Telegram::Bot::Types::InlineQueryResultArticle.new(
-            id: i,
-            title: "Cool title 2",
-            input_message_content: Telegram::Bot::Types::InputTextMessageContent.new(message_text: "hey looool 2")) ]
+            id: book.uuid,
+            title: book.title,
+            description: book.authors,
+            thumb_url: book.cover_url.blank? ? '' : BOOKMATE_HOST + book.cover_url,
+            input_message_content: Telegram::Bot::Types::InputTextMessageContent.new(
+              message_text:
+              "<b>#{book.title}</b>
+  <a href='#{prepare_book_url(book)}'>On Bookmate</a>
+  Author: #{book.authors}",
+              parse_mode: 'HTML'))
+      i += 1
+      end
+    end
+
+    results
+  end
+
+  def prepare_book_url(book)
+    BOOKMATE_HOST + '/books/' + book.uuid
+  end
+
+  def main
+    Telegram::Bot::Client.run(TOKEN) do |bot|
+        bot.listen do |message|
+
+          case message
+          when Telegram::Bot::Types::Message
+            puts "Message @#{message.from.username}: #{message.text}"
+
+            # create a button to come back to the previously active chat
+            kb = [Telegram::Bot::Types::InlineKeyboardButton.new(text: 'Switch to inline', switch_inline_query: 'Hello I\'m awesome')]
+            markup = Telegram::Bot::Types::InlineKeyboardMarkup.new(inline_keyboard: kb)
+            bot.api.send_message(chat_id: message.chat.id, text: process_message(message), reply_markup: markup)
+          when Telegram::Bot::Types::InlineQuery
+            puts "InlineQuery @#{message.from.username}: #{message.query} and #{message.id}"
+
+            # inline results
+            results = process_inline_query(message)
+            if results.empty?
+              puts bot.api.answer_inline_query(inline_query_id: message.id, results: results, switch_pm_text: 'Switch to PM', cache_time: 1)
+            else
+              puts bot.api.answer_inline_query(inline_query_id: message.id, results: results, cache_time: 1)
+            end
+          end
       end
     end
   end
-
-  return results
 end
 
-def defaultAnswerQuery
-  return results = [
-    Telegram::Bot::Types::InlineQueryResultArticle.new(
-      id: 1,
-      title: "Cool title",
-      input_message_content: Telegram::Bot::Types::InputTextMessageContent.new(message_text: "hey looool")),
-    Telegram::Bot::Types::InlineQueryResultArticle.new(
-      id: 2,
-      title: "Cool title 2",
-      input_message_content: Telegram::Bot::Types::InputTextMessageContent.new(message_text: "hey looool 2")) ]
-end
+# easy hack to daemonize bot, sorry for that
+module Azazel
+  extend Fallen
 
-Telegram::Bot::Client.run(token) do |bot|
-  bot.listen do |message|
-
-    case message
-    when Telegram::Bot::Types::Message
-      puts "Message @#{message.from.username}: #{message.text}"
-
-      bot.api.send_message(chat_id: message.chat.id, text: processMessage(message) )
-    when Telegram::Bot::Types::InlineQuery
-      puts " InlineQuery @#{message.from.username}: #{message.query} and #{message.id}"
-      
-      puts bot.api.answer_inline_query(inline_query_id: message.id, results: processInlineQuery(message), cache_time: 86400)
-      # puts bot.api.answer_inline_query(inline_query_id: message.id, results: results.to_a, cache_time: 86400)
+  def self.run
+    while running?
+      bot = TelegramInlineBot.new
+      bot.main
     end
-
   end
 end
+
+Azazel.daemonize!
+Azazel.start!
